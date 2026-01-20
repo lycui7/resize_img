@@ -5,13 +5,14 @@ import { Upload, Download, RefreshCw, AlertCircle, CheckCircle2, FileImage } fro
 /**
  * ID Photo Resizer
  * Goal: Increase/Adjust file size of an ID photo without changing its pixel dimensions.
- * This is often required for official government/school portals.
+ * Targets a specific range (150KB - 250KB) with a preferred center of ~200KB.
  */
 
 const TARGET_WIDTH = 295;
 const TARGET_HEIGHT = 413;
 const MIN_KB = 150;
 const MAX_KB = 250;
+const PREFERRED_KB = 200; // Updated target center
 
 const App: React.FC = () => {
   const [image, setImage] = useState<string | null>(null);
@@ -57,12 +58,6 @@ const App: React.FC = () => {
         img.onerror = reject;
       });
 
-      // 1. Verify dimensions
-      if (img.width !== TARGET_WIDTH || img.height !== TARGET_HEIGHT) {
-        // We warn but proceed, standardizing to the requested 295x413 if they want
-        console.warn(`Original size ${img.width}x${img.height} differs from target.`);
-      }
-
       const canvas = document.createElement('canvas');
       canvas.width = TARGET_WIDTH;
       canvas.height = TARGET_HEIGHT;
@@ -70,48 +65,41 @@ const App: React.FC = () => {
       
       if (!ctx) throw new Error('Canvas context failed');
 
-      // Draw background white just in case
+      // Draw background white
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, TARGET_WIDTH, TARGET_HEIGHT);
       ctx.drawImage(img, 0, 0, TARGET_WIDTH, TARGET_HEIGHT);
 
       /**
-       * To increase file size without adding visual noise:
-       * We use high quality JPEG compression and, if still too small, 
-       * we can append minimal metadata or slightly adjust quality.
-       * 
-       * Browser canvas.toDataURL at quality 1.0 is usually efficient.
-       * If we need to "bulk up" the file, we can iterate with quality.
+       * To increase file size to exactly ~200KB:
+       * 1. Export as highest quality JPEG.
+       * 2. If it's still below 200KB (likely for 295x413), pad with neutral metadata/bytes.
        */
       
-      let quality = 0.95;
       let finalBlob: Blob | null = null;
       let currentSize = 0;
 
-      // Binary search / iterative approach to hit the target 150KB - 250KB
-      // Note: Reaching 150KB for a tiny 295x413 image purely through compression is hard.
-      // We often need to "pad" the file metadata or use a less efficient format, 
-      // but standard practice for these picky systems is to use very high quality JPG.
-      
-      // Attempt 1: High quality
+      // Initial high-quality export
       finalBlob = await new Promise<Blob | null>(res => canvas.toBlob(b => res(b), 'image/jpeg', 1.0));
-      currentSize = finalBlob?.size || 0;
+      if (!finalBlob) throw new Error('Blob generation failed');
+      currentSize = finalBlob.size;
 
-      // If still too small (common for 295x413), we might need to use PNG or 
-      // inject some non-visible data (XMP/Metadata padding).
-      if (currentSize < MIN_KB * 1024) {
-        // Since standard web APIs don't easily allow arbitrary metadata injection,
-        // we can try to encode at extremely high density or use PNG if allowed.
-        // However, most systems want JPG.
-        // Hack: We can append comment bytes at the end of the JPG stream.
-        const arrayBuffer = await finalBlob!.arrayBuffer();
-        const paddingSize = (MIN_KB * 1024 + 5000) - currentSize; // Add enough to be safely in range
+      // Aim for the PREFERRED_KB (200KB)
+      const targetSizeInBytes = PREFERRED_KB * 1024;
+      
+      if (currentSize < targetSizeInBytes) {
+        const arrayBuffer = await finalBlob.arrayBuffer();
+        // Calculate padding to hit exactly around 200KB
+        const paddingSize = targetSizeInBytes - currentSize;
+        
         if (paddingSize > 0) {
           const paddedBuffer = new Uint8Array(arrayBuffer.byteLength + paddingSize);
           paddedBuffer.set(new Uint8Array(arrayBuffer), 0);
-          // Fill the rest with random-ish data (or zeros) which increases file size
+          
+          // Use non-zero random-ish data to prevent some aggressive server-side compressors 
+          // from stripping the padding (though usually they don't touch the EOF).
           for (let i = arrayBuffer.byteLength; i < paddedBuffer.byteLength; i++) {
-            paddedBuffer[i] = Math.floor(Math.random() * 256);
+            paddedBuffer[i] = (i % 255); 
           }
           finalBlob = new Blob([paddedBuffer], { type: 'image/jpeg' });
           currentSize = finalBlob.size;
@@ -134,7 +122,7 @@ const App: React.FC = () => {
     if (processedImage) {
       const link = document.createElement('a');
       link.href = processedImage;
-      link.download = `resized_id_photo_${Math.floor(Date.now() / 1000)}.jpg`;
+      link.download = `id_photo_200kb_${Math.floor(Date.now() / 1000)}.jpg`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -153,7 +141,7 @@ const App: React.FC = () => {
             <h1 className="text-xl font-bold tracking-tight">证件照大小调整工具</h1>
           </div>
           <div className="text-sm text-slate-500 hidden sm:block">
-            目标: 295x413px | 150KB - 250KB
+            目标: 295x413px | 150KB - 250KB (首选 ~200KB)
           </div>
         </div>
       </header>
@@ -222,7 +210,7 @@ const App: React.FC = () => {
               ) : (
                 <RefreshCw className="w-5 h-5" />
               )}
-              {processing ? '正在处理...' : '开始优化大小'}
+              {processing ? '正在处理...' : '调整至约 200KB'}
             </button>
           </section>
 
@@ -240,15 +228,15 @@ const App: React.FC = () => {
                     <div className="flex flex-col items-center gap-1">
                       <div className="flex items-center gap-1 text-green-600 font-bold">
                         <CheckCircle2 className="w-5 h-5" />
-                        <span>优化成功</span>
+                        <span>调整成功</span>
                       </div>
-                      <p className="text-2xl font-black text-slate-800">
+                      <p className="text-3xl font-black text-slate-800">
                         {(processedSize! / 1024).toFixed(1)} <span className="text-sm font-normal text-slate-500">KB</span>
                       </p>
                       <div className="flex gap-2 text-xs text-slate-400">
                         <span>尺寸: 295 x 413</span>
                         <span>|</span>
-                        <span>格式: JPEG</span>
+                        <span>已达到首选大小</span>
                       </div>
                     </div>
                   </div>
@@ -284,16 +272,16 @@ const App: React.FC = () => {
               <p className="font-bold text-slate-700">295 × 413 像素</p>
             </div>
             <div className="bg-white p-4 rounded-xl border border-blue-100">
-              <p className="text-xs text-slate-400 mb-1">目标大小</p>
-              <p className="font-bold text-slate-700">150KB - 250KB</p>
+              <p className="text-xs text-slate-400 mb-1">首选大小</p>
+              <p className="font-bold text-slate-700">约 200 KB</p>
             </div>
             <div className="bg-white p-4 rounded-xl border border-blue-100">
               <p className="text-xs text-slate-400 mb-1">处理方案</p>
-              <p className="font-bold text-slate-700 text-sm">填充无损元数据及高质量编码</p>
+              <p className="font-bold text-slate-700 text-sm">精确字节填充技术</p>
             </div>
           </div>
           <p className="mt-4 text-xs text-slate-500 leading-relaxed">
-            * 提示：对于像素如此小的照片，普通JPG编码很难达到200KB。本工具采用“静默填充”技术，在不破坏画质的情况下，将文件体积填充至指定区间，以满足严格的报名系统要求。
+            * 提示：为了确保能通过 150KB-250KB 的审核区间，我们将目标锁定在 200KB 左右。即使原图非常精简，本工具也能通过增加安全元数据的方式，将体积提升至最稳妥的范围内。
           </p>
         </section>
 
